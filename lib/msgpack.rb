@@ -4,5 +4,3 @@ begin
 rescue LoadError
   require "msgpack/msgpack"
 end
-
-require 'msgpack/extended'
