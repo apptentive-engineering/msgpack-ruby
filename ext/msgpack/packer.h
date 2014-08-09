@@ -265,7 +265,7 @@ static inline void msgpack_packer_write_double(msgpack_packer_t* pk, double v)
     msgpack_buffer_write_byte_and_data(PACKER_BUFFER_(pk), 0xcb, castbuf.mem, 8);
 }
 
-static inline void msgpack_packer_write_raw_header(msgpack_packer_t* pk, unsigned int n)
+static inline void msgpack_packer_write_string_header(msgpack_packer_t* pk, unsigned int n)
 {
     if(n < 32) {
         msgpack_buffer_ensure_writable(PACKER_BUFFER_(pk), 1);
@@ -283,6 +283,23 @@ static inline void msgpack_packer_write_raw_header(msgpack_packer_t* pk, unsigne
         msgpack_buffer_ensure_writable(PACKER_BUFFER_(pk), 5);
         uint32_t be = _msgpack_be32(n);
         msgpack_buffer_write_byte_and_data(PACKER_BUFFER_(pk), 0xdb, (const void*)&be, 4);
+    }
+}
+
+static inline void msgpack_packer_write_binary_header(msgpack_packer_t* pk, unsigned int n)
+{
+    if(n < 256) {
+        msgpack_buffer_ensure_writable(PACKER_BUFFER_(pk), 2);
+        uint8_t be = (uint8_t) n;
+        msgpack_buffer_write_byte_and_data(PACKER_BUFFER_(pk), 0xc4, (const void*)&be, 1);
+    } else if(n < 65536) {
+        msgpack_buffer_ensure_writable(PACKER_BUFFER_(pk), 3);
+        uint16_t be = _msgpack_be16(n);
+        msgpack_buffer_write_byte_and_data(PACKER_BUFFER_(pk), 0xc5, (const void*)&be, 2);
+    } else {
+        msgpack_buffer_ensure_writable(PACKER_BUFFER_(pk), 5);
+        uint32_t be  = _msgpack_be32(n);
+        msgpack_buffer_write_byte_and_data(PACKER_BUFFER_(pk), 0xc6, (const void*)&be, 4);
     }
 }
 
@@ -325,14 +342,27 @@ void _msgpack_packer_write_string_to_io(msgpack_packer_t* pk, VALUE string);
 
 static inline void msgpack_packer_write_string_value(msgpack_packer_t* pk, VALUE v)
 {
-    /* TODO encoding conversion? */
     /* actual return type of RSTRING_LEN is long */
     unsigned long len = RSTRING_LEN(v);
     if(len > 0xffffffffUL) {
         // TODO rb_eArgError?
         rb_raise(rb_eArgError, "size of string is too long to pack: %lu bytes should be <= %lu", len, 0xffffffffUL);
     }
-    msgpack_packer_write_raw_header(pk, (unsigned int)len);
+
+#ifdef COMPAT_HAVE_ENCODING
+    int encindex = ENCODING_GET(v);
+    if (encindex == rb_utf8_encindex()) {
+        msgpack_packer_write_string_header(pk, (unsigned int)len);
+    } else if (encindex == rb_ascii8bit_encindex()) {
+        msgpack_packer_write_binary_header(pk, (unsigned int)len);
+    } else {
+        /* TODO encoding conversion */
+        rb_raise(rb_eEncCompatError, "Unsupported encoding %s, must be UTF-8 or ASCII-8BIT", rb_enc_name(rb_enc_from_index(encindex)));
+    }
+#else
+    msgpack_packer_write_string_header(pk, (unsigned int)len);
+#endif
+
     msgpack_buffer_append_string(PACKER_BUFFER_(pk), v);
 }
 
@@ -349,7 +379,7 @@ static inline void msgpack_packer_write_symbol_value(msgpack_packer_t* pk, VALUE
         // TODO rb_eArgError?
         rb_raise(rb_eArgError, "size of symbol is too long to pack: %lu bytes should be <= %lu", len, 0xffffffffUL);
     }
-    msgpack_packer_write_raw_header(pk, (unsigned int)len);
+    msgpack_packer_write_string_header(pk, (unsigned int)len);
     msgpack_buffer_append(PACKER_BUFFER_(pk), name, len);
 #endif
 }

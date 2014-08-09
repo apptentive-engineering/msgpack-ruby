@@ -53,8 +53,9 @@ struct msgpack_unpacker_t {
 
     VALUE last_object;
 
-    VALUE reading_raw;
-    size_t reading_raw_remaining;
+    VALUE reading_str;
+    size_t reading_str_remaining;
+    int reading_str_encoding;
 
     VALUE buffer_ref;
 
@@ -69,7 +70,8 @@ enum msgpack_unpacker_object_type {
     TYPE_BOOLEAN,
     TYPE_INTEGER,
     TYPE_FLOAT,
-    TYPE_RAW,
+    TYPE_STRING,
+    TYPE_BINARY,
     TYPE_ARRAY,
     TYPE_MAP,
 };

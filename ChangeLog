@@ -1,3 +1,7 @@
+2014-08-09 version 0.?.?:
+* Added Binary types
+* Renamed 'raw' to 'string'
+
 
 2015-02-04 version 0.5.11:
 

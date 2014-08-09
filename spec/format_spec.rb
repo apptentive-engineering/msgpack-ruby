@@ -115,6 +115,30 @@ describe MessagePack do
     it "str 32" do
       check( s=str_n( 1<<16 ) => "\xdb\x00\x01\x00\x00#{s}" )
     end
+
+    it "unsupported encoding" do
+      lambda { 'wrong string encoding'.encode('iso-8859-1').to_msgpack }.should raise_error(Encoding::CompatibilityError)
+     end
+  end
+
+  describe "Binary" do
+    it "bin 8" do
+      check(
+        bin_n(0) => "\xc4\x00",
+        b=bin_n( (1<<8)-1 ) => "\xc4\xff#{b}"
+      )
+    end
+
+    it "bin 16" do
+      check(
+        b=bin_n( 1<<8 ) => "\xc5\x01\x00#{b}",
+        b=bin_n( (1<<16)-1 ) => "\xc5\xff\xff#{b}"
+      )
+    end
+
+    it "bin 32" do
+      check( b=bin_n( 1<<16 ) => "\xc6\x00\x01\x00\x00#{b}" )
+    end
   end
 
   describe "Array" do
@@ -171,6 +195,10 @@ describe MessagePack do
 
   def str_n(n)
     ('X' * n).encode('utf-8')
+  end
+
+  def bin_n(n)
+    str_n(n).b
   end
 
   def array_n(n)

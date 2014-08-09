@@ -212,8 +212,10 @@ static VALUE Unpacker_peek_next_type(VALUE self)
         return rb_intern("integer");
     case TYPE_FLOAT:
         return rb_intern("float");
-    case TYPE_RAW:
-        return rb_intern("raw");
+    case TYPE_STRING:
+        return rb_intern("string");
+    case TYPE_BINARY:
+        return rb_intern("binary");
     case TYPE_ARRAY:
         return rb_intern("array");
     case TYPE_MAP:

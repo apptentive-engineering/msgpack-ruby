@@ -29,7 +29,7 @@ static msgpack_rmem_t s_stack_rmem;
 #endif
 
 #ifdef COMPAT_HAVE_ENCODING  /* see compat.h*/
-static int s_enc_utf8;
+static int s_enc_utf8, s_enc_ascii8bit;
 #endif
 
 void msgpack_unpacker_static_init()
@@ -40,6 +40,7 @@ void msgpack_unpacker_static_init()
 
 #ifdef COMPAT_HAVE_ENCODING
     s_enc_utf8 = rb_utf8_encindex();
+    s_enc_ascii8bit = rb_ascii8bit_encindex();
 #endif
 }
 
@@ -61,7 +62,7 @@ void _msgpack_unpacker_init(msgpack_unpacker_t* uk)
     uk->head_byte = HEAD_BYTE_REQUIRED;
 
     uk->last_object = Qnil;
-    uk->reading_raw = Qnil;
+    uk->reading_str = Qnil;
 
 #ifdef UNPACKER_STACK_RMEM
     uk->stack = msgpack_rmem_alloc(&s_stack_rmem);
@@ -87,7 +88,7 @@ void _msgpack_unpacker_destroy(msgpack_unpacker_t* uk)
 void msgpack_unpacker_mark(msgpack_unpacker_t* uk)
 {
     rb_gc_mark(uk->last_object);
-    rb_gc_mark(uk->reading_raw);
+    rb_gc_mark(uk->reading_str);
 
     msgpack_unpacker_stack_t* s = uk->stack;
     msgpack_unpacker_stack_t* send = uk->stack + uk->stack_depth;
@@ -111,8 +112,9 @@ void _msgpack_unpacker_reset(msgpack_unpacker_t* uk)
     uk->stack_depth = 0;
 
     uk->last_object = Qnil;
-    uk->reading_raw = Qnil;
-    uk->reading_raw_remaining = 0;
+    uk->reading_str = Qnil;
+    uk->reading_str_remaining = 0;
+    uk->reading_str_encoding = s_enc_utf8;
 }
 
 
@@ -151,7 +153,7 @@ static inline int object_complete_string(msgpack_unpacker_t* uk, VALUE str)
 {
 #ifdef COMPAT_HAVE_ENCODING
     // TODO ruby 2.0 has String#b method
-    ENCODING_SET(str, s_enc_utf8);
+    ENCODING_SET(str, uk->reading_str_encoding);
 #endif
     return object_complete(uk, str);
 }
@@ -224,35 +226,36 @@ static inline bool is_reading_map_key(msgpack_unpacker_t* uk)
     return false;
 }
 
-static int read_raw_body_cont(msgpack_unpacker_t* uk)
+static int read_str_body_cont(msgpack_unpacker_t* uk)
 {
-    size_t length = uk->reading_raw_remaining;
+    size_t length = uk->reading_str_remaining;
 
-    if(uk->reading_raw == Qnil) {
-        uk->reading_raw = rb_str_buf_new(length);
+    if(uk->reading_str == Qnil) {
+        uk->reading_str = rb_str_buf_new(length);
     }
 
     do {
-        size_t n = msgpack_buffer_read_to_string(UNPACKER_BUFFER_(uk), uk->reading_raw, length);
+        size_t n = msgpack_buffer_read_to_string(UNPACKER_BUFFER_(uk), uk->reading_str, length);
         if(n == 0) {
             return PRIMITIVE_EOF;
         }
-        /* update reading_raw_remaining everytime because
+        /* update reading_str_remaining everytime because
          * msgpack_buffer_read_to_string raises IOError */
-        uk->reading_raw_remaining = length = length - n;
+        uk->reading_str_remaining = length = length - n;
     } while(length > 0);
 
-    object_complete_string(uk, uk->reading_raw);
-    uk->reading_raw = Qnil;
+    object_complete_string(uk, uk->reading_str);
+    uk->reading_str = Qnil;
+    uk->reading_str_encoding = s_enc_utf8;
     return PRIMITIVE_OBJECT_COMPLETE;
 }
 
-static inline int read_raw_body_begin(msgpack_unpacker_t* uk, bool str)
+static inline int read_str_body_begin(msgpack_unpacker_t* uk, bool str)
 {
-    /* assuming uk->reading_raw == Qnil */
+    /* assuming uk->reading_str == Qnil */
 
     /* try optimized read */
-    size_t length = uk->reading_raw_remaining;
+    size_t length = uk->reading_str_remaining;
     if(length <= msgpack_buffer_top_readable_size(UNPACKER_BUFFER_(uk))) {
         /* don't use zerocopy for hash keys but get a frozen string directly
          * because rb_hash_aset freezes keys and it causes copying */
@@ -262,17 +265,18 @@ static inline int read_raw_body_begin(msgpack_unpacker_t* uk, bool str)
         if(will_freeze) {
             rb_obj_freeze(string);
         }
-        uk->reading_raw_remaining = 0;
+        uk->reading_str_remaining = 0;
+        uk->reading_str_encoding = s_enc_utf8;
         return PRIMITIVE_OBJECT_COMPLETE;
     }
 
-    return read_raw_body_cont(uk);
+    return read_str_body_cont(uk);
 }
 
 static int read_primitive(msgpack_unpacker_t* uk)
 {
-    if(uk->reading_raw_remaining > 0) {
-        return read_raw_body_cont(uk);
+    if(uk->reading_str_remaining > 0) {
+        return read_str_body_cont(uk);
     }
 
     int b = get_head_byte(uk);
@@ -287,14 +291,16 @@ static int read_primitive(msgpack_unpacker_t* uk)
     SWITCH_RANGE(b, 0xe0, 0xff)  // Negative Fixnum
         return object_complete(uk, INT2NUM((int8_t)b));
 
-    SWITCH_RANGE(b, 0xa0, 0xbf)  // FixRaw / fixstr
+    SWITCH_RANGE(b, 0xa0, 0xbf)  // FixStr
+        uk->reading_str_encoding = s_enc_utf8;
         int count = b & 0x1f;
         if(count == 0) {
             return object_complete_string(uk, rb_str_buf_new(0));
         }
-        /* read_raw_body_begin sets uk->reading_raw */
-        uk->reading_raw_remaining = count;
-        return read_raw_body_begin(uk, true);
+        /* read_str_body_begin sets uk->reading_str */
+        uk->reading_str_remaining = count;
+
+        return read_str_body_begin(uk, true);
 
     SWITCH_RANGE(b, 0x90, 0x9f)  // FixArray
         int count = b & 0x0f;
@@ -403,76 +409,82 @@ static int read_primitive(msgpack_unpacker_t* uk)
         //case 0xd7:  // fixext 8
         //case 0xd8:  // fixext 16
 
-        case 0xd9:  // raw 8 / str 8
+        case 0xd9:  // str 8
             {
                 READ_CAST_BLOCK_OR_RETURN_EOF(cb, uk, 1);
+                uk->reading_str_encoding = s_enc_utf8;
                 uint8_t count = cb->u8;
                 if(count == 0) {
                     return object_complete_string(uk, rb_str_buf_new(0));
                 }
-                /* read_raw_body_begin sets uk->reading_raw */
-                uk->reading_raw_remaining = count;
-                return read_raw_body_begin(uk, true);
+                /* read_str_body_begin sets uk->reading_str */
+                uk->reading_str_remaining = count;
+                return read_str_body_begin(uk, true);
             }
 
-        case 0xda:  // raw 16 / str 16
+        case 0xda:  // str 16
             {
                 READ_CAST_BLOCK_OR_RETURN_EOF(cb, uk, 2);
+                uk->reading_str_encoding = s_enc_utf8;
                 uint16_t count = _msgpack_be16(cb->u16);
                 if(count == 0) {
                     return object_complete_string(uk, rb_str_buf_new(0));
                 }
-                /* read_raw_body_begin sets uk->reading_raw */
-                uk->reading_raw_remaining = count;
-                return read_raw_body_begin(uk, true);
+                /* read_str_body_begin sets uk->reading_str */
+                uk->reading_str_remaining = count;
+                return read_str_body_begin(uk, true);
             }
 
-        case 0xdb:  // raw 32 / str 16
+        case 0xdb:  // str 32
             {
                 READ_CAST_BLOCK_OR_RETURN_EOF(cb, uk, 4);
+                uk->reading_str_encoding = s_enc_utf8;
                 uint32_t count = _msgpack_be32(cb->u32);
                 if(count == 0) {
                     return object_complete_string(uk, rb_str_buf_new(0));
                 }
-                /* read_raw_body_begin sets uk->reading_raw */
-                uk->reading_raw_remaining = count;
-                return read_raw_body_begin(uk, true);
+                /* read_str_body_begin sets uk->reading_str */
+                uk->reading_str_remaining = count;
+                return read_str_body_begin(uk, true);
             }
 
         case 0xc4:  // bin 8
             {
                 READ_CAST_BLOCK_OR_RETURN_EOF(cb, uk, 1);
+                uk->reading_str_encoding = s_enc_ascii8bit;
                 uint8_t count = cb->u8;
                 if(count == 0) {
                     return object_complete_string(uk, rb_str_buf_new(0));
                 }
-                /* read_raw_body_begin sets uk->reading_raw */
-                uk->reading_raw_remaining = count;
-                return read_raw_body_begin(uk, false);
+                /* read_str_body_begin sets uk->reading_str */
+                uk->reading_str_remaining = count;
+                return read_str_body_begin(uk, false);
             }
 
         case 0xc5:  // bin 16
             {
                 READ_CAST_BLOCK_OR_RETURN_EOF(cb, uk, 2);
                 uint16_t count = _msgpack_be16(cb->u16);
+                uk->reading_str_encoding = s_enc_ascii8bit;
                 if(count == 0) {
                     return object_complete_string(uk, rb_str_buf_new(0));
                 }
-                /* read_raw_body_begin sets uk->reading_raw */
-                uk->reading_raw_remaining = count;
-                return read_raw_body_begin(uk, false);
+                /* read_str_body_begin sets uk->reading_str */
+                uk->reading_str_remaining = count;
+                return read_str_body_begin(uk, false);
             }
 
         case 0xc6:  // bin 32
             {
                 READ_CAST_BLOCK_OR_RETURN_EOF(cb, uk, 4);
+                uk->reading_str_encoding = s_enc_ascii8bit;
                 uint32_t count = _msgpack_be32(cb->u32);
                 if(count == 0) {
                     return object_complete_string(uk, rb_str_buf_new(0));
                 }
-                /* read_raw_body_begin sets uk->reading_raw */
-                uk->reading_raw_remaining = count;
-                return read_raw_body_begin(uk, false);
+                /* read_str_body_begin sets uk->reading_str */
+                uk->reading_str_remaining = count;
+                return read_str_body_begin(uk, false);
             }
 
         case 0xdc:  // array 16
@@ -691,8 +703,8 @@ int msgpack_unpacker_peek_next_object_type(msgpack_unpacker_t* uk)
     SWITCH_RANGE(b, 0xe0, 0xff)  // Negative Fixnum
         return TYPE_INTEGER;
 
-    SWITCH_RANGE(b, 0xa0, 0xbf)  // FixRaw
-        return TYPE_RAW;
+    SWITCH_RANGE(b, 0xa0, 0xbf)  // FixStr
+        return TYPE_STRING;
 
     SWITCH_RANGE(b, 0x90, 0x9f)  // FixArray
         return TYPE_ARRAY;
@@ -725,15 +737,15 @@ int msgpack_unpacker_peek_next_object_type(msgpack_unpacker_t* uk)
         case 0xd3:  // signed int 64
             return TYPE_INTEGER;
 
-        case 0xd9:  // raw 8 / str 8
-        case 0xda:  // raw 16 / str 16
-        case 0xdb:  // raw 32 / str 32
-            return TYPE_RAW;
+        case 0xd9:  // str 8
+        case 0xda:  // str 16
+        case 0xdb:  // str 32
+            return TYPE_STRING;
 
         case 0xc4:  // bin 8
         case 0xc5:  // bin 16
         case 0xc6:  // bin 32
-            return TYPE_RAW;
+            return TYPE_BINARY;
 
         case 0xdc:  // array 16
         case 0xdd:  // array 32
