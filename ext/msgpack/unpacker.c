@@ -267,16 +267,18 @@ static inline int read_str_body_begin(msgpack_unpacker_t* uk, bool str)
             rb_obj_freeze(string);
         }
         uk->reading_str_remaining = 0;
-        uk->reading_str_encoding = s_enc_utf8;
+        uk->reading_str_encoding = str ? s_enc_utf8 : s_enc_ascii8bit;
         return PRIMITIVE_OBJECT_COMPLETE;
     }
 
-    return read_str_body_cont(uk);
+    read_str_body_cont(uk);
+    uk->reading_str_encoding = str ? s_enc_utf8 : s_enc_ascii8bit;
+    return PRIMITIVE_OBJECT_COMPLETE;
 }
 
 static inline int read_extended_body_begin(msgpack_unpacker_t* uk, int8_t type)
 {
-    read_raw_body_begin(uk, false);
+    read_str_body_begin(uk, false);
 
     VALUE s_create = rb_intern("create");
     VALUE argv[2] = { INT2FIX(type), uk->last_object };
@@ -333,7 +335,7 @@ static int read_primitive(msgpack_unpacker_t* uk)
         READ_CAST_BLOCK_OR_RETURN_EOF(cb, uk, 1);
         int8_t type = cb->i8;
 
-        uk->reading_raw_remaining = count;
+        uk->reading_str_remaining = count;
         return read_extended_body_begin(uk, type);
 
     SWITCH_RANGE(b, 0xc0, 0xdf)  // Variable
@@ -356,7 +358,7 @@ static int read_primitive(msgpack_unpacker_t* uk)
                 uint8_t count = (head >> 8) & 0x00FF;
                 int8_t type   = head & 0x00FF;
 
-                uk->reading_raw_remaining = count;
+                uk->reading_str_remaining = count;
                 return read_extended_body_begin(uk, type);
             }
 
@@ -367,7 +369,7 @@ static int read_primitive(msgpack_unpacker_t* uk)
                 uint16_t count = (head >> 16) & 0x0000FFFF;
                 int8_t type    = (head >> 8) & 0x000000FF;
 
-                uk->reading_raw_remaining = count;
+                uk->reading_str_remaining = count;
                 return read_extended_body_begin(uk, type);
             }
 
@@ -378,7 +380,7 @@ static int read_primitive(msgpack_unpacker_t* uk)
                 uint32_t count = (head >> 32) & 0x00FFFFFFFF;
                 int8_t type    = (head >> 24) & 0x00000000FF;
 
-                uk->reading_raw_remaining = count;
+                uk->reading_str_remaining = count;
                 return read_extended_body_begin(uk, type);
             }
 
