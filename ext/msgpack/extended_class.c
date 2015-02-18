@@ -63,11 +63,29 @@ static VALUE Extended_initialize(VALUE self, VALUE type, VALUE data)
 
 static VALUE Extended_create(VALUE klass, VALUE type, VALUE data)
 {
-    VALUE obj = rb_obj_alloc(klass);
-    VALUE argv[2] = { type, data };
-    rb_obj_call_init(obj, 2, argv);
+    VALUE obj;
+
+    VALUE handlers = rb_cv_get(klass, "@@handlers");
+    VALUE handler = rb_hash_aref( handlers, type );
+    if ( handler != Qnil ) {
+      obj = rb_funcall(handler, rb_intern("call"), 1, data);
+    } else {
+      obj = rb_obj_alloc(klass);
+      VALUE argv[2] = { type, data };
+      rb_obj_call_init(obj, 2, argv);
+    }
 
     return obj;
+}
+
+static VALUE Extended_register(VALUE klass, VALUE type, VALUE method)
+{
+    Check_Type(type, T_FIXNUM);
+
+    VALUE handlers = rb_cv_get(klass, "@@handlers");
+    rb_hash_aset( handlers, type, method );
+
+    return method;
 }
 
 static VALUE Extended_data(VALUE self)
@@ -139,5 +157,8 @@ void MessagePack_Extended_module_init(VALUE mMessagePack)
     rb_define_method(cMessagePack_Extended, "to_msgpack", Extended_to_msgpack, -1);
     rb_define_method(cMessagePack_Extended, "==", Extended_eql, 1);
     rb_define_method(cMessagePack_Extended, "eql?", Extended_eql, 1);
+
+    rb_define_class_variable(cMessagePack_Extended, "@@handlers", rb_hash_new());
+    rb_define_singleton_method(cMessagePack_Extended, "register", Extended_register, 2);
 }
 

@@ -93,4 +93,24 @@ describe MessagePack do
       expect(initialized).to eql changed
     end
   end
+
+  describe ".register" do
+    it "registers handler method" do
+      meth = proc { |data| data.upcase }
+      MessagePack::Extended.register(42, meth)
+      expect(MessagePack::Extended.class_variable_get('@@handlers')).to eq( 42 => meth )
+    end
+
+    it "calls handler on create" do
+      meth = proc { |data| data.upcase }
+      MessagePack::Extended.register(42, meth)
+
+      packed = MessagePack.pack( MessagePack::Extended.create(42, "hello world") )
+      expect(MessagePack.unpack(packed)).to eql "HELLO WORLD"
+
+      packed = MessagePack.pack( MessagePack::Extended.create(41, "hello world") )
+      expect(MessagePack.unpack(packed)).to be_a(MessagePack::Extended)
+
+    end
+  end
 end
