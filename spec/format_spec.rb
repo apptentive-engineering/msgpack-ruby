@@ -120,6 +120,12 @@ describe MessagePack do
       # s=str_n( (2**32)-1 ) => "\xdb\xff\xff\xff\xff#{s}"
     end
 
+    it "US-ASCII encoding" do
+      ascii_packed = MessagePack.pack('foo'.encode('us-ascii'))
+      utf8_packed = MessagePack.pack('foo'.encode('utf-8'))
+      expect(ascii_packed).to eq utf8_packed
+    end
+
     it "unsupported encoding" do
       lambda { 'wrong string encoding'.encode('iso-8859-1').to_msgpack }.should raise_error(Encoding::CompatibilityError)
      end

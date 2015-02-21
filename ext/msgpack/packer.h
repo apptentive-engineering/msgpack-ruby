@@ -384,13 +384,13 @@ static inline void msgpack_packer_write_string_value(msgpack_packer_t* pk, VALUE
 
 #ifdef COMPAT_HAVE_ENCODING
     int encindex = ENCODING_GET(v);
-    if (encindex == rb_utf8_encindex()) {
+    if ((encindex == rb_utf8_encindex()) || (encindex == rb_usascii_encindex())) {
         msgpack_packer_write_string_header(pk, (unsigned int)len);
     } else if (encindex == rb_ascii8bit_encindex()) {
         msgpack_packer_write_binary_header(pk, (unsigned int)len);
     } else {
         /* TODO encoding conversion */
-        rb_raise(rb_eEncCompatError, "Unsupported encoding %s, must be UTF-8 or ASCII-8BIT", rb_enc_name(rb_enc_from_index(encindex)));
+        rb_raise(rb_eEncCompatError, "Unsupported encoding %s, must be UTF-8, ASCII-8BIT, or US-ASCII", rb_enc_name(rb_enc_from_index(encindex)));
     }
 #else
     msgpack_packer_write_string_header(pk, (unsigned int)len);

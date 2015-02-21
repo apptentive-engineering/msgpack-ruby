@@ -96,9 +96,9 @@ describe MessagePack do
 
   describe ".register" do
     it "registers handler method" do
-      meth = proc { |data| data.upcase }
+      meth = proc {}
       MessagePack::Extended.register(42, meth)
-      expect(MessagePack::Extended.class_variable_get('@@handlers')).to eq( 42 => meth )
+      expect(MessagePack::Extended.class_variable_get('@@handlers')[42]).to eq meth
     end
 
     it "calls handler on create" do
@@ -110,7 +110,6 @@ describe MessagePack do
 
       packed = MessagePack.pack( MessagePack::Extended.create(41, "hello world") )
       expect(MessagePack.unpack(packed)).to be_a(MessagePack::Extended)
-
     end
   end
 end
