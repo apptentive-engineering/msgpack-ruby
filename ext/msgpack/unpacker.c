@@ -278,6 +278,7 @@ static inline int read_str_body_begin(msgpack_unpacker_t* uk, bool str)
 
 static inline int read_extended_body_begin(msgpack_unpacker_t* uk, int8_t type)
 {
+    uk->reading_str_encoding = s_enc_ascii8bit;
     read_str_body_begin(uk, false);
 
     VALUE s_create = rb_intern("create");
